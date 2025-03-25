@@ -56,4 +56,25 @@ RAFT_INST_CAGRA_BUILD(float, uint32_t);
 
 #undef RAFT_INST_CAGRA_BUILD
 
+void optimize(raft::resources const& res,
+              raft::host_matrix_view<const uint32_t, int64_t, raft::row_major> knn_graph,
+              raft::host_matrix_view<uint32_t, int64_t, raft::row_major> new_graph,
+              const bool guarantee_connectivity)
+{
+  auto input_knn_graph_unconst = raft::make_device_matrix_view(
+    const_cast<uint32_t*>(knn_graph.data_handle()), knn_graph.extent(0), knn_graph.extent(1));
+  cuvs::neighbors::cagra::detail::optimize(
+    res, input_knn_graph_unconst, new_graph, guarantee_connectivity);
+}
+
+void optimize(raft::resources const& res,
+              raft::device_matrix_view<const uint32_t, int64_t, raft::row_major> knn_graph,
+              raft::host_matrix_view<uint32_t, int64_t, raft::row_major> new_graph,
+              const bool guarantee_connectivity)
+{
+  auto input_knn_graph_unconst = raft::make_device_matrix_view(
+    const_cast<uint32_t*>(knn_graph.data_handle()), knn_graph.extent(0), knn_graph.extent(1));
+  cuvs::neighbors::cagra::detail::optimize(
+    res, input_knn_graph_unconst, new_graph, guarantee_connectivity);
+}
 }  // namespace cuvs::neighbors::cagra
