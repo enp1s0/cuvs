@@ -41,6 +41,7 @@ namespace cuvs::neighbors::cagra {
                        raft::host_matrix_view<IdxT, int64_t, raft::row_major> knn_graph,    \
                        cuvs::neighbors::nn_descent::index_params build_params)              \
   {                                                                                         \
+    build_params.return_distances = false;                                                  \
     cuvs::neighbors::cagra::detail::build_knn_graph(res, dataset, knn_graph, build_params); \
   }                                                                                         \
   void build_knn_graph(raft::resources const& res,                                          \
@@ -48,6 +49,7 @@ namespace cuvs::neighbors::cagra {
                        raft::host_matrix_view<IdxT, int64_t, raft::row_major> knn_graph,    \
                        cuvs::neighbors::nn_descent::index_params build_params)              \
   {                                                                                         \
+    build_params.return_distances = false;                                                  \
     cuvs::neighbors::cagra::detail::build_knn_graph(res, dataset, knn_graph, build_params); \
   }
 
