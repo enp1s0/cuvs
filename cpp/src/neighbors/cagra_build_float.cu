@@ -43,6 +43,7 @@ namespace cuvs::neighbors::cagra {
                        cuvs::neighbors::nn_descent::index_params build_params)              \
   {                                                                                         \
     build_params.return_distances = false;                                                  \
+    build_params.graph_degree     = knn_graph.extent(1);                                    \
     cuvs::neighbors::cagra::detail::build_knn_graph(res, dataset, knn_graph, build_params); \
   }                                                                                         \
   void build_knn_graph(raft::resources const& res,                                          \
@@ -51,6 +52,7 @@ namespace cuvs::neighbors::cagra {
                        cuvs::neighbors::nn_descent::index_params build_params)              \
   {                                                                                         \
     build_params.return_distances = false;                                                  \
+    build_params.graph_degree     = knn_graph.extent(1);                                    \
     cuvs::neighbors::cagra::detail::build_knn_graph(res, dataset, knn_graph, build_params); \
   }
 
