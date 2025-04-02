@@ -20,40 +20,48 @@
 
 namespace cuvs::neighbors::cagra {
 
-#define RAFT_INST_CAGRA_BUILD(T, IdxT)                                                      \
-  auto build(raft::resources const& handle,                                                 \
-             const cuvs::neighbors::cagra::index_params& params,                            \
-             raft::device_matrix_view<const T, int64_t, raft::row_major> dataset)           \
-    ->cuvs::neighbors::cagra::index<T, IdxT>                                                \
-  {                                                                                         \
-    return cuvs::neighbors::cagra::build<T, IdxT>(handle, params, dataset);                 \
-  }                                                                                         \
-                                                                                            \
-  auto build(raft::resources const& handle,                                                 \
-             const cuvs::neighbors::cagra::index_params& params,                            \
-             raft::host_matrix_view<const T, int64_t, raft::row_major> dataset)             \
-    ->cuvs::neighbors::cagra::index<T, IdxT>                                                \
-  {                                                                                         \
-    return cuvs::neighbors::cagra::build<T, IdxT>(handle, params, dataset);                 \
-  }                                                                                         \
-                                                                                            \
-  void build_knn_graph(raft::resources const& res,                                          \
-                       raft::host_matrix_view<const T, int64_t, raft::row_major> dataset,   \
-                       raft::host_matrix_view<IdxT, int64_t, raft::row_major> knn_graph,    \
-                       cuvs::neighbors::nn_descent::index_params build_params)              \
-  {                                                                                         \
-    build_params.return_distances = false;                                                  \
-    build_params.graph_degree     = knn_graph.extent(1);                                    \
-    cuvs::neighbors::cagra::detail::build_knn_graph(res, dataset, knn_graph, build_params); \
-  }                                                                                         \
-  void build_knn_graph(raft::resources const& res,                                          \
-                       raft::device_matrix_view<const T, int64_t, raft::row_major> dataset, \
-                       raft::host_matrix_view<IdxT, int64_t, raft::row_major> knn_graph,    \
-                       cuvs::neighbors::nn_descent::index_params build_params)              \
-  {                                                                                         \
-    build_params.return_distances = false;                                                  \
-    build_params.graph_degree     = knn_graph.extent(1);                                    \
-    cuvs::neighbors::cagra::detail::build_knn_graph(res, dataset, knn_graph, build_params); \
+#define RAFT_INST_CAGRA_BUILD(T, IdxT)                                                             \
+  auto build(raft::resources const& handle,                                                        \
+             const cuvs::neighbors::cagra::index_params& params,                                   \
+             raft::device_matrix_view<const T, int64_t, raft::row_major> dataset)                  \
+    ->cuvs::neighbors::cagra::index<T, IdxT>                                                       \
+  {                                                                                                \
+    return cuvs::neighbors::cagra::build<T, IdxT>(handle, params, dataset);                        \
+  }                                                                                                \
+                                                                                                   \
+  auto build(raft::resources const& handle,                                                        \
+             const cuvs::neighbors::cagra::index_params& params,                                   \
+             raft::host_matrix_view<const T, int64_t, raft::row_major> dataset)                    \
+    ->cuvs::neighbors::cagra::index<T, IdxT>                                                       \
+  {                                                                                                \
+    return cuvs::neighbors::cagra::build<T, IdxT>(handle, params, dataset);                        \
+  }                                                                                                \
+                                                                                                   \
+  void build_knn_graph(raft::resources const& res,                                                 \
+                       raft::host_matrix_view<const T, int64_t, raft::row_major> dataset,          \
+                       raft::host_matrix_view<IdxT, int64_t, raft::row_major> knn_graph,           \
+                       cuvs::neighbors::nn_descent::index_params build_params_)                    \
+  {                                                                                                \
+    auto build_params =                                                                            \
+      cuvs::neighbors::nn_descent::index_params(knn_graph.extent(1), build_params_.metric);        \
+    if (build_params_.graph_degree != static_cast<size_t>(knn_graph.extent(1))) {                  \
+      RAFT_LOG_WARN("degrees are mismatch. Set as %lu", static_cast<size_t>(knn_graph.extent(1))); \
+    }                                                                                              \
+    build_params.return_distances = false;                                                         \
+    cuvs::neighbors::cagra::detail::build_knn_graph(res, dataset, knn_graph, build_params);        \
+  }                                                                                                \
+  void build_knn_graph(raft::resources const& res,                                                 \
+                       raft::device_matrix_view<const T, int64_t, raft::row_major> dataset,        \
+                       raft::host_matrix_view<IdxT, int64_t, raft::row_major> knn_graph,           \
+                       cuvs::neighbors::nn_descent::index_params build_params_)                    \
+  {                                                                                                \
+    auto build_params =                                                                            \
+      cuvs::neighbors::nn_descent::index_params(knn_graph.extent(1), build_params_.metric);        \
+    if (build_params_.graph_degree != static_cast<size_t>(knn_graph.extent(1))) {                  \
+      RAFT_LOG_WARN("degrees are mismatch. Set as %lu", static_cast<size_t>(knn_graph.extent(1))); \
+    }                                                                                              \
+    build_params.return_distances = false;                                                         \
+    cuvs::neighbors::cagra::detail::build_knn_graph(res, dataset, knn_graph, build_params);        \
   }
 
 RAFT_INST_CAGRA_BUILD(float, uint32_t);
