@@ -353,6 +353,12 @@ void build_knn_graph(
   raft::host_matrix_view<IdxT, int64_t, raft::row_major> knn_graph,
   cuvs::neighbors::nn_descent::index_params build_params)
 {
+  if (build_params.return_distances) {
+    RAFT_LOG_WARN(
+      "CAGRA build does not supoort nn_descent::index_params.return_distances == true. Overwrote "
+      "it to false.");
+    build_params.return_distances = false;
+  }
   std::optional<raft::host_matrix_view<IdxT, int64_t, row_major>> graph_view = knn_graph;
   auto nn_descent_idx = cuvs::neighbors::nn_descent::build(res, build_params, dataset, graph_view);
 
