@@ -79,8 +79,8 @@ index<T, IdxT> merge(raft::resources const& handle,
     for (cagra_index_t* index : indices) {
       auto* strided_dset = dynamic_cast<const strided_dataset<T, ds_idx_type>*>(&index->data());
 
-      RAFT_CUDA_TRY(cudaMemcpy2DAsync(dst + offset * dim,
-                                      sizeof(T) * dim,
+      RAFT_CUDA_TRY(cudaMemcpy2DAsync(dst + offset * stride,
+                                      sizeof(T) * stride,
                                       strided_dset->view().data_handle(),
                                       sizeof(T) * stride,
                                       sizeof(T) * dim,
@@ -96,7 +96,7 @@ index<T, IdxT> merge(raft::resources const& handle,
 
   try {
     auto updated_dataset = raft::make_device_matrix<T, std::int64_t>(
-      handle, std::int64_t(new_dataset_size), std::int64_t(dim));
+      handle, std::int64_t(new_dataset_size), std::int64_t(stride));
 
     merge_dataset(updated_dataset.data_handle());
 
@@ -107,8 +107,8 @@ index<T, IdxT> merge(raft::resources const& handle,
       using layout_t           = typename matrix_t::layout_type;
       using container_policy_t = typename matrix_t::container_policy_type;
       using owning_t           = owning_dataset<T, int64_t, layout_t, container_policy_t>;
-      auto out_layout          = raft::make_strided_layout(updated_dataset.view().extents(),
-                                                  std::array<int64_t, 2>{stride, 1});
+      auto out_layout          = raft::make_strided_layout(
+        raft::make_extents<int64_t>(new_dataset_size, dim), std::array<int64_t, 2>{stride, 1});
       merged_index.update_dataset(handle, owning_t{std::move(updated_dataset), out_layout});
     }
     RAFT_LOG_DEBUG("cagra merge: using device memory for merged dataset");
