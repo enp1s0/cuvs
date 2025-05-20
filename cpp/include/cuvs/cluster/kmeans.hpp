@@ -493,8 +493,8 @@ void fit(const raft::resources& handle,
  *                   X,
  *                   std::nullopt,
  *                   centroids.view(),
- *                   false,
  *                   labels.view(),
+ *                   false,
  *                   raft::make_scalar_view(&inertia));
  * @endcode
  *
@@ -507,10 +507,10 @@ void fit(const raft::resources& handle,
  * @param[in]     centroids        Cluster centroids. The data must be in
  *                                 row-major format.
  *                                 [dim = n_clusters x n_features]
- * @param[in]     normalize_weight True if the weights should be normalized
  * @param[out]    labels           Index of the cluster each sample in X
  *                                 belongs to.
  *                                 [len = n_samples]
+ * @param[in]     normalize_weight True if the weights should be normalized
  * @param[out]    inertia          Sum of squared distances of samples to
  *                                 their closest cluster center.
  */
@@ -551,8 +551,8 @@ void predict(raft::resources const& handle,
  *                   X,
  *                   std::nullopt,
  *                   centroids.view(),
- *                   false,
  *                   labels.view(),
+ *                   false,
  *                   raft::make_scalar_view(&inertia));
  * @endcode
  *
@@ -565,10 +565,10 @@ void predict(raft::resources const& handle,
  * @param[in]     centroids        Cluster centroids. The data must be in
  *                                 row-major format.
  *                                 [dim = n_clusters x n_features]
- * @param[in]     normalize_weight True if the weights should be normalized
  * @param[out]    labels           Index of the cluster each sample in X
  *                                 belongs to.
  *                                 [len = n_samples]
+ * @param[in]     normalize_weight True if the weights should be normalized
  * @param[out]    inertia          Sum of squared distances of samples to
  *                                 their closest cluster center.
  */
@@ -609,8 +609,8 @@ void predict(raft::resources const& handle,
  *                   X,
  *                   std::nullopt,
  *                   centroids.view(),
- *                   false,
  *                   labels.view(),
+ *                   false,
  *                   raft::make_scalar_view(&inertia));
  * @endcode
  *
@@ -623,10 +623,10 @@ void predict(raft::resources const& handle,
  * @param[in]     centroids        Cluster centroids. The data must be in
  *                                 row-major format.
  *                                 [dim = n_clusters x n_features]
- * @param[in]     normalize_weight True if the weights should be normalized
  * @param[out]    labels           Index of the cluster each sample in X
  *                                 belongs to.
  *                                 [len = n_samples]
+ * @param[in]     normalize_weight True if the weights should be normalized
  * @param[out]    inertia          Sum of squared distances of samples to
  *                                 their closest cluster center.
  */
@@ -667,8 +667,8 @@ void predict(raft::resources const& handle,
  *                   X,
  *                   std::nullopt,
  *                   centroids.view(),
- *                   false,
  *                   labels.view(),
+ *                   false,
  *                   raft::make_scalar_view(&inertia));
  * @endcode
  *
@@ -681,10 +681,10 @@ void predict(raft::resources const& handle,
  * @param[in]     centroids        Cluster centroids. The data must be in
  *                                 row-major format.
  *                                 [dim = n_clusters x n_features]
- * @param[in]     normalize_weight True if the weights should be normalized
  * @param[out]    labels           Index of the cluster each sample in X
  *                                 belongs to.
  *                                 [len = n_samples]
+ * @param[in]     normalize_weight True if the weights should be normalized
  * @param[out]    inertia          Sum of squared distances of samples to
  *                                 their closest cluster center.
  */
