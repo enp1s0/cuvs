@@ -7,6 +7,7 @@
 
 #include "detail/ann_utils.cuh"
 #include "detail/cagra/add_nodes.cuh"
+#include "detail/cagra/cagra_ace.cuh"
 #include "detail/cagra/cagra_build.cuh"
 #include "detail/cagra/cagra_merge.cuh"
 #include "detail/cagra/cagra_search.cuh"
