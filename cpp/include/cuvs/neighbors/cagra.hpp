@@ -91,11 +91,8 @@ struct ace_params {
    * Build pruned core-plus-argument partial graphs, then add reverse edges globally.
    *
    * Each partition first builds an intermediate kNN graph and prunes it without a local
-   * reverse-edge merge. The final pass preserves the first half of every adjacency row and
-   * inserts incoming edges originating in other core partitions into the remaining entries.
-   * Reverse edges are staged and merged one target partition at a time, so GPU workspace scales
-   * with a partition and its incoming-edge candidates rather than the full graph. This mode does
-   * not support `use_disk`.
+   * reverse-edge merge. Then build the reverse-edge graph globally and merge it into the pruned
+   * graph. This mode does not support `use_disk`.
    */
   bool add_global_reverse_edges = false;
 
