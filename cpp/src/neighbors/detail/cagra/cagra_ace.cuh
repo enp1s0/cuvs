@@ -6,6 +6,7 @@
 #pragma once
 
 #include "../../../util/kvikio_io.hpp"
+#include "cagra_ace_disk.hpp"
 #include "cagra_build.cuh"
 
 #include <cuvs/cluster/kmeans.hpp>
@@ -1166,6 +1167,7 @@ void ace_validate_disk_mode_partitions(raft::resources const& res,
                                        size_t intermediate_degree,
                                        size_t graph_degree,
                                        bool guarantee_connectivity,
+                                       bool add_global_reverse_edges,
                                        ace_memory_requirements& mem)
 {
   // In disk mode, we don't need the full dataset or final graph in memory.
@@ -1193,6 +1195,19 @@ void ace_validate_disk_mode_partitions(raft::resources const& res,
         gpu_workspace_size_fixed] =
     helpers::optimize_workspace_size(
       sub_partition_size, graph_degree, intermediate_degree, sizeof(IdxT), guarantee_connectivity);
+
+  // Conservatively reserve the disk reverse-edge heaps in addition to build workspace.
+  // The record buffer is shared by all buckets and does not grow with the edge count.
+  size_t reverse_buffer_bytes  = 0;
+  size_t reverse_bytes_per_row = 0;
+  if (add_global_reverse_edges) {
+    reverse_buffer_bytes = ace_disk_reverse_edges<IdxT>::buffer_bytes(mem.available_host_memory);
+    reverse_bytes_per_row =
+      graph_degree * sizeof(typename ace_disk_reverse_edges<IdxT>::incoming_edge) +
+      sizeof(uint32_t);
+    host_workspace_size_total += reverse_buffer_bytes + sub_partition_size * reverse_bytes_per_row;
+    host_workspace_size_fixed += reverse_buffer_bytes;
+  }
 
   // Check host memory requirements
   size_t disk_mode_host_required = mem.partition_labels_size + mem.id_mapping_size +
@@ -1296,7 +1311,8 @@ void ace_validate_disk_mode_partitions(raft::resources const& res,
     mem.sub_graph_size =
       new_sub_partition_size * (intermediate_degree + graph_degree) * sizeof(IdxT);
     mem.total_size = mem.partition_labels_size + mem.id_mapping_size + mem.sub_dataset_size +
-                     mem.sub_graph_size + mem.cagra_graph_size + new_opt_host_ws;
+                     mem.sub_graph_size + mem.cagra_graph_size + new_opt_host_ws +
+                     reverse_buffer_bytes + new_sub_partition_size * reverse_bytes_per_row;
 
     RAFT_LOG_INFO(
       "ACE: Updated per-partition memory estimates: dataset %.2f GiB, graph %.2f GiB, "
@@ -1411,7 +1427,7 @@ void ace_merge_partition_reverse_edges(raft::resources const& res,
              partition_size,
              stream);
   RAFT_CUDA_TRY(cudaMemsetAsync(
-    d_reverse_graph_count.data_handle(), 0, partition_size * sizeof(uint32_t), stream));
+    d_reverse_graph_count.data_handle(), 0, partition_size * sizeof(uint32_t), stream.get()));
 
   constexpr uint32_t threads  = 256;
   auto const candidate_blocks = static_cast<uint32_t>(
@@ -1427,17 +1443,17 @@ void ace_merge_partition_reverse_edges(raft::resources const& res,
                host_candidate_destinations.data(),
                num_candidates,
                stream);
-    graph::kern_make_rev_graph_k<IdxT>
-      <<<candidate_blocks, threads, 0, stream>>>(d_candidate_destinations.view(),
-                                                 d_reverse_graph.view(),
-                                                 d_reverse_graph_count.view(),
-                                                 0,
-                                                 d_candidate_sources.data_handle(),
-                                                 d_sorted_partition_nodes.data_handle(),
-                                                 d_sorted_partition_local_indices.data_handle());
+    graph::kern_make_rev_graph_k<IdxT><<<candidate_blocks, threads, 0, stream.get()>>>(
+      d_candidate_destinations.view(),
+      d_reverse_graph.view(),
+      d_reverse_graph_count.view(),
+      0,
+      d_candidate_sources.data_handle(),
+      d_sorted_partition_nodes.data_handle(),
+      d_sorted_partition_local_indices.data_handle());
     RAFT_CUDA_TRY(cudaPeekAtLastError());
   }
-  ace_merge_partition_reverse_edges<<<partition_blocks, threads, 0, stream>>>(
+  ace_merge_partition_reverse_edges<<<partition_blocks, threads, 0, stream.get()>>>(
     d_partition_graph.data_handle(),
     d_reverse_graph.data_handle(),
     d_reverse_graph_count.data_handle(),
@@ -1589,9 +1605,6 @@ auto build_ace(raft::resources const& res, const index_params& params, DatasetVi
                                                           ace_params.max_gpu_memory_gb,
                                                           params.guarantee_connectivity,
                                                           mem);
-    RAFT_EXPECTS(!ace_params.add_global_reverse_edges || !use_disk_mode,
-                 "ACE: partitioned global reverse-edge addition does not support disk mode");
-
     // Validate and adjust partitions if disk mode is enabled
     if (use_disk_mode) {
       ace_validate_disk_mode_partitions<T, IdxT>(res,
@@ -1601,6 +1614,7 @@ auto build_ace(raft::resources const& res, const index_params& params, DatasetVi
                                                  intermediate_degree,
                                                  graph_degree,
                                                  params.guarantee_connectivity,
+                                                 ace_params.add_global_reverse_edges,
                                                  mem);
       ace_validate_partition_count(n_partitions, dataset_size, true);
     }
@@ -1736,6 +1750,15 @@ auto build_ace(raft::resources const& res, const index_params& params, DatasetVi
     auto search_graph = use_disk_mode
                           ? raft::make_host_matrix<IdxT, int64_t>(0, 0)
                           : raft::make_host_matrix<IdxT, int64_t>(dataset_size, graph_degree);
+
+    std::optional<ace_disk_reverse_edges<IdxT>> disk_reverse_edges;
+    if (use_disk_mode && ace_params.add_global_reverse_edges) {
+      disk_reverse_edges.emplace(
+        build_dir,
+        std::span<IdxT const>(core_partition_offsets.data_handle(), n_partitions + 1),
+        graph_degree,
+        ace_disk_reverse_edges<IdxT>::buffer_bytes(mem.available_host_memory));
+    }
 
     // Process each partition
     auto partition_processing_start = std::chrono::high_resolution_clock::now();
@@ -1928,7 +1951,30 @@ auto build_ace(raft::resources const& res, const index_params& params, DatasetVi
       auto adjust_end          = optimize_end;
       auto write_elapsed       = 0L;
       const size_t graph_bytes = core_sub_dataset_size * graph_degree * sizeof(IdxT);
-      if (use_disk_mode) {
+      if (disk_reverse_edges.has_value()) {
+        // The pruned partial graph is already on the host. Convert only its core rows
+        // to disk IDs and collect incoming records before writing or releasing it.
+        std::vector<IdxT> adjusted_graph(core_sub_dataset_size * graph_degree);
+        auto const core_offset      = core_partition_offsets(partition_id);
+        auto const augmented_offset = augmented_partition_offsets(partition_id);
+        for (size_t edge = 0; edge < adjusted_graph.size(); ++edge) {
+          auto const local_id = partial_sub_graph->data_handle()[edge];
+          RAFT_EXPECTS(size_t(local_id) < sub_dataset_size,
+                       "ACE: partial graph contains an invalid neighbor");
+          adjusted_graph[edge] = size_t(local_id) < core_sub_dataset_size
+                                   ? static_cast<IdxT>(core_offset + local_id)
+                                   : core_forward_mapping(augmented_backward_mapping(
+                                       augmented_offset + local_id - core_sub_dataset_size));
+        }
+        disk_reverse_edges->append_partition(partition_id, adjusted_graph);
+        adjust_end = std::chrono::high_resolution_clock::now();
+        auto const graph_offset =
+          size_t(core_offset) * graph_degree * sizeof(IdxT) + graph_header_size;
+        cuvs::util::write_large_file(graph_fd, adjusted_graph.data(), graph_bytes, graph_offset);
+        write_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                          std::chrono::high_resolution_clock::now() - adjust_end)
+                          .count();
+      } else if (use_disk_mode) {
         auto adjusted_search_graph =
           raft::make_device_matrix<IdxT, int64_t>(res, core_sub_dataset_size, graph_degree);
         auto adjust_sub_graph = [&](auto sub_graph) {
@@ -2031,11 +2077,16 @@ auto build_ace(raft::resources const& res, const index_params& params, DatasetVi
 
     if (ace_params.add_global_reverse_edges) {
       RAFT_LOG_INFO("ACE: Adding global cross-partition reverse edges partition by partition");
-      ace_add_global_reverse_edges(res,
-                                   search_graph.view(),
-                                   partition_labels.view(),
-                                   core_backward_mapping.view(),
-                                   core_partition_offsets.view());
+      if (disk_reverse_edges.has_value()) {
+        disk_reverse_edges->merge(graph_fd, graph_header_size);
+        disk_reverse_edges.reset();
+      } else {
+        ace_add_global_reverse_edges(res,
+                                     search_graph.view(),
+                                     partition_labels.view(),
+                                     core_backward_mapping.view(),
+                                     core_partition_offsets.view());
+      }
     }
 
     // Clean up augmented dataset file to save disk space (no longer needed after partitions
