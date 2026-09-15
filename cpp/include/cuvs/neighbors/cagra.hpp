@@ -78,6 +78,9 @@ struct ace_params {
    * already exist, but ACE's named artifacts must not already exist. Simultaneous
    * builds must use different directories. On failure, ACE removes only artifacts
    * it created and never deletes unrelated directory contents.
+   * With `add_global_reverse_edges`, temporary incoming-edge records also require up to
+   * `dataset_size * graph_degree * (2 * sizeof(IdxT) + sizeof(uint32_t))` bytes, plus any
+   * record alignment padding. These records are removed after the merge.
    */
   std::string build_dir = "/tmp/ace_build";
   /**
@@ -92,7 +95,12 @@ struct ace_params {
    *
    * Each partition first builds an intermediate kNN graph and prunes it without a local
    * reverse-edge merge. Then build the reverse-edge graph globally and merge it into the pruned
-   * graph. This mode does not support `use_disk`.
+   * graph. In disk mode (explicit or automatic), cross-partition incoming edges are buffered
+   * to temporary files while building each pruned partition, then merged on the CPU one
+   * destination partition at a time, retaining at most `graph_degree` incoming candidates
+   * per node in memory.
+   * The merge preserves edge-rank priority; ties use reordered source ID in disk mode
+   * and are GPU-scheduling-dependent in memory mode. Disabled by default.
    */
   bool add_global_reverse_edges = false;
 
