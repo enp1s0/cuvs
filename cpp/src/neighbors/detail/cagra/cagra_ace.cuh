@@ -1411,7 +1411,7 @@ void ace_merge_partition_reverse_edges(raft::resources const& res,
              partition_size,
              stream);
   RAFT_CUDA_TRY(cudaMemsetAsync(
-    d_reverse_graph_count.data_handle(), 0, partition_size * sizeof(uint32_t), stream));
+    d_reverse_graph_count.data_handle(), 0, partition_size * sizeof(uint32_t), stream.get()));
 
   constexpr uint32_t threads  = 256;
   auto const candidate_blocks = static_cast<uint32_t>(
@@ -1427,17 +1427,17 @@ void ace_merge_partition_reverse_edges(raft::resources const& res,
                host_candidate_destinations.data(),
                num_candidates,
                stream);
-    graph::kern_make_rev_graph_k<IdxT>
-      <<<candidate_blocks, threads, 0, stream>>>(d_candidate_destinations.view(),
-                                                 d_reverse_graph.view(),
-                                                 d_reverse_graph_count.view(),
-                                                 0,
-                                                 d_candidate_sources.data_handle(),
-                                                 d_sorted_partition_nodes.data_handle(),
-                                                 d_sorted_partition_local_indices.data_handle());
+    graph::kern_make_rev_graph_k<IdxT><<<candidate_blocks, threads, 0, stream.get()>>>(
+      d_candidate_destinations.view(),
+      d_reverse_graph.view(),
+      d_reverse_graph_count.view(),
+      0,
+      d_candidate_sources.data_handle(),
+      d_sorted_partition_nodes.data_handle(),
+      d_sorted_partition_local_indices.data_handle());
     RAFT_CUDA_TRY(cudaPeekAtLastError());
   }
-  ace_merge_partition_reverse_edges<<<partition_blocks, threads, 0, stream>>>(
+  ace_merge_partition_reverse_edges<<<partition_blocks, threads, 0, stream.get()>>>(
     d_partition_graph.data_handle(),
     d_reverse_graph.data_handle(),
     d_reverse_graph_count.data_handle(),
