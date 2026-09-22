@@ -187,15 +187,20 @@ struct ace_params {
    *
    * Small values might improve recall but potentially degrade performance and
    * increase memory usage. Partitions should not be too small to prevent issues
-   * in KNN graph construction. The partition size is on average 2 * (n_rows / npartitions) * dim *
-   * sizeof(T). 2 is because of the core and augmented vectors. Please account for imbalance in the
-   * partition sizes (up to 3x in our tests).
+   * in KNN graph construction. The partition size is on average (1 + nsubpartitions) * (n_rows /
+   * npartitions) * dim * sizeof(T), accounting for the core and augmented vectors. Please account
+   * for imbalance in the partition sizes (up to 3x in our tests).
    *
    * If the specified number of partitions results in partitions that exceed
    * available memory, the value will be automatically increased to fit memory
    * constraints and a warning will be issued.
    */
   size_t npartitions = 0;
+  /** Number of additional nearest partitions assigned to each vector. Must be positive and
+   * smaller than npartitions (unless npartitions is auto-selected). Increasing this improves
+   * overlap at the cost of build time, memory, and temporary disk space. Default: 1.
+   */
+  size_t nsubpartitions = 1;
   /**
    * The index quality for the ACE build.
    *
