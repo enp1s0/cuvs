@@ -1647,10 +1647,12 @@ auto build_ace(raft::resources const& res, const index_params& params, DatasetVi
 
   auto total_start = std::chrono::high_resolution_clock::now();
   RAFT_LOG_INFO(
-    "ACE build: start rows=%zu dim=%zu partitions=%zu graph_degree=%zu intermediate_degree=%zu",
+    "ACE build: start rows=%zu dim=%zu partitions=%zu sub_partitions=%zu graph_degree=%zu "
+    "intermediate_degree=%zu",
     dataset_size,
     dataset_dim,
     n_partitions,
+    nsubpartitions,
     static_cast<size_t>(params.graph_degree),
     static_cast<size_t>(params.intermediate_graph_degree));
 
