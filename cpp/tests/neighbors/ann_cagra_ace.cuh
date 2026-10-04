@@ -22,6 +22,7 @@ struct AnnCagraAceInputs {
   bool add_global_reverse_edges;
   cuvs::distance::DistanceType metric;
   int npartitions;
+  size_t nsubpartitions = 1;
 };
 
 // Own the workspace even if a build throws or a fatal assertion returns early.
@@ -57,7 +58,8 @@ class AnnCagraAceTest : public ::testing::TestWithParam<AnnCagraAceInputs> {
  public:
   void testCagraAce()
   {
-    auto const [use_disk, global_reverse_edges, metric, npartitions] = this->GetParam();
+    auto const [use_disk, global_reverse_edges, metric, npartitions, nsubpartitions] =
+      this->GetParam();
     // Keep the average core partition size fixed while varying the partition count.
     const uint32_t rows = 5000 * npartitions;
     constexpr int dim = 16, queries = 100, k = 10, degree = 64;
@@ -80,6 +82,7 @@ class AnnCagraAceTest : public ::testing::TestWithParam<AnnCagraAceInputs> {
     params.attach_dataset_on_build   = false;
     graph_build_params::ace_params ace;
     ace.npartitions              = npartitions;
+    ace.nsubpartitions           = nsubpartitions;
     ace.ef_construction          = 100;
     ace.use_disk                 = use_disk;
     ace.add_global_reverse_edges = global_reverse_edges;
@@ -173,18 +176,30 @@ class AnnCagraAceTest : public ::testing::TestWithParam<AnnCagraAceInputs> {
   }
 };
 
-const std::vector<AnnCagraAceInputs> inputs_ace = raft::util::itertools::product<AnnCagraAceInputs>(
-  {false, true},  // use_disk
-  {false, true},  // add_global_reverse_edges
-  {cuvs::distance::DistanceType::L2Expanded, cuvs::distance::DistanceType::InnerProduct},
-  {2, 8, 32, 64});  // npartitions
+const std::vector<AnnCagraAceInputs> inputs_ace = [] {
+  auto inputs = raft::util::itertools::product<AnnCagraAceInputs>(
+    {false, true},  // use_disk
+    {false, true},  // add_global_reverse_edges
+    {cuvs::distance::DistanceType::L2Expanded, cuvs::distance::DistanceType::InnerProduct},
+    {2, 8, 32, 64},  // npartitions
+    {size_t{1}});
+  for (bool disk : {false, true}) {
+    for (bool reverse : {false, true}) {
+      for (size_t secondary : {size_t{2}, size_t{3}}) {
+        inputs.push_back({disk, reverse, cuvs::distance::DistanceType::L2Expanded, 4, secondary});
+      }
+    }
+  }
+  return inputs;
+}();
 
 std::string ace_case_name(::testing::TestParamInfo<AnnCagraAceInputs> const& info)
 {
-  auto const [disk, reverse, metric, npartitions] = info.param;
+  auto const [disk, reverse, metric, npartitions, nsubpartitions] = info.param;
   return std::string(disk ? "Disk" : "Memory") + (reverse ? "GlobalReverse" : "LocalReverse") +
          (metric == cuvs::distance::DistanceType::L2Expanded ? "L2" : "InnerProduct") +
-         "Partitions" + std::to_string(npartitions);
+         "Partitions" + std::to_string(npartitions) + "Subpartitions" +
+         std::to_string(nsubpartitions);
 }
 
 }  // namespace
