@@ -1631,7 +1631,7 @@ auto build_ace(raft::resources const& res, const index_params& params, DatasetVi
     params.graph_degree,
     npartitions);
 
-  auto dataset_view   = dataset.view();
+  auto dataset_view   = cuvs::neighbors::dense_row_major_view(dataset);
   size_t dataset_size = dataset.n_rows();
   size_t dataset_dim  = dataset.dim();
 
@@ -1887,20 +1887,80 @@ auto build_ace(raft::resources const& res, const index_params& params, DatasetVi
       using device_sub_index_t  = cuvs::neighbors::cagra::device_padded_index<T, IdxT>;
       using host_sub_index_t    = cuvs::neighbors::cagra::host_standard_index<T, IdxT>;
       using sub_index_t         = std::variant<device_sub_index_t, host_sub_index_t>;
-      auto build_host_sub_index = [&](auto& sub_dataset) -> sub_index_t {
-        read_end              = std::chrono::high_resolution_clock::now();
-        auto sub_dataset_view = cuvs::neighbors::make_host_standard_dataset_view(
-          raft::make_const_mdspan(sub_dataset.view()));
-        auto host_index = ::cuvs::neighbors::cagra::build(res, sub_index_params, sub_dataset_view);
-        static_assert(std::is_same_v<decltype(host_index), host_sub_index_t>);
-        return sub_index_t{std::in_place_type<host_sub_index_t>, std::move(host_index)};
-      };
       std::optional<raft::host_matrix<IdxT, int64_t>> partial_sub_graph;
       std::optional<sub_index_t> sub_index;
-      if (ace_params.add_global_reverse_edges) {
-        auto core_argument_partition =
-          raft::make_host_matrix<T, int64_t>(sub_dataset_size, dataset_dim);
+      auto build_host_partition_graph = [&](auto& sub_dataset) {
+        read_end              = std::chrono::high_resolution_clock::now();
+        auto sub_dataset_view = raft::make_const_mdspan(sub_dataset.view());
+        if (ace_params.add_global_reverse_edges) {
+          // Keep only pruned outgoing edges. Reverse edges are added after all core
+          // rows have been mapped to global IDs, including cross-partition edges.
+          partial_sub_graph.emplace(ace_build_pruned_partial_graph<T, IdxT>(
+            res, sub_dataset_view, intermediate_degree, graph_degree, params.metric));
+        } else {
+          auto host_index = ::cuvs::neighbors::cagra::build(
+            res,
+            sub_index_params,
+            cuvs::neighbors::make_host_standard_dataset_view(sub_dataset_view));
+          static_assert(std::is_same_v<decltype(host_index), host_sub_index_t>);
+          sub_index.emplace(std::in_place_type<host_sub_index_t>, std::move(host_index));
+        }
+      };
+      // The prune-only builder consumes a host partition. The regular builder can
+      // also read directly into device memory when the partition fits.
+      auto build_partition_graph = [&]() {
         if (use_disk_mode) {
+          const size_t current_free_gpu = rmm::available_device_memory().first;
+          const size_t configured_gpu =
+            ace_params.max_gpu_memory_gb > 0
+              ? static_cast<size_t>(ace_params.max_gpu_memory_gb * (1ULL << 30))
+              : current_free_gpu;
+          const size_t free_gpu_bytes = std::min(current_free_gpu, configured_gpu);
+          if (!ace_params.add_global_reverse_edges &&
+              sub_ds_bytes < static_cast<size_t>(0.4 * free_gpu_bytes)) {
+            try {
+              auto sub_dataset_tight =
+                raft::make_device_matrix<T, int64_t>(res, sub_dataset_size, dataset_dim);
+              raft::resource::sync_stream(res);
+              ace_load_partition_dataset_from_disk<T, IdxT>(partition_id,
+                                                            dataset_dim,
+                                                            partition_histogram.view(),
+                                                            core_partition_offsets.view(),
+                                                            augmented_partition_offsets.view(),
+                                                            reordered_fd,
+                                                            augmented_fd,
+                                                            reordered_header_size,
+                                                            augmented_header_size,
+                                                            sub_dataset_tight.view());
+              read_end              = std::chrono::high_resolution_clock::now();
+              auto sub_dataset_view = raft::make_const_mdspan(sub_dataset_tight.view());
+              std::unique_ptr<cuvs::neighbors::device_padded_dataset<T, int64_t>>
+                sub_dataset_padded;
+              auto sub_dataset_dev =
+                [&]() -> cuvs::neighbors::device_padded_dataset_view<T, int64_t> {
+                if (cuvs::neighbors::matrix_row_width_matches_cagra_required(sub_dataset_view)) {
+                  return cuvs::neighbors::make_device_padded_dataset_view(res, sub_dataset_view);
+                }
+                sub_dataset_padded =
+                  cuvs::neighbors::make_device_padded_dataset(res, sub_dataset_view);
+                return sub_dataset_padded->view();
+              }();
+              auto direct_index =
+                ::cuvs::neighbors::cagra::detail::build_from_device_matrix<T, IdxT>(
+                  res, sub_index_params, sub_dataset_dev);
+              used_device_read = true;
+              sub_index.emplace(std::in_place_type<device_sub_index_t>, std::move(direct_index));
+              return;
+            } catch (const std::bad_alloc& e) {
+              RAFT_LOG_WARN(
+                "ACE: partition %lu did not fit in device memory for a direct (GDS) read: %s; "
+                "falling back to a host read",
+                partition_id,
+                e.what());
+            }
+          }
+
+          auto sub_dataset = raft::make_host_matrix<T, int64_t>(sub_dataset_size, dataset_dim);
           ace_load_partition_dataset_from_disk<T, IdxT>(partition_id,
                                                         dataset_dim,
                                                         partition_histogram.view(),
@@ -1910,102 +1970,24 @@ auto build_ace(raft::resources const& res, const index_params& params, DatasetVi
                                                         augmented_fd,
                                                         reordered_header_size,
                                                         augmented_header_size,
-                                                        core_argument_partition.view());
-        } else {
-          ace_make_core_argument_partition<T, IdxT>(core_sub_dataset_size,
-                                                    augmented_sub_dataset_size,
-                                                    dataset_dim,
-                                                    partition_id,
-                                                    dataset_view,
-                                                    core_backward_mapping.view(),
-                                                    augmented_backward_mapping.view(),
-                                                    core_partition_offsets.view(),
-                                                    augmented_partition_offsets.view(),
-                                                    core_argument_partition.view());
+                                                        sub_dataset.view());
+          return build_host_partition_graph(sub_dataset);
         }
-        read_end                          = std::chrono::high_resolution_clock::now();
-        auto core_argument_partition_view = raft::make_host_matrix_view<const T, int64_t>(
-          core_argument_partition.data_handle(), sub_dataset_size, dataset_dim);
-        partial_sub_graph.emplace(ace_build_pruned_partial_graph<T, IdxT>(
-          res, core_argument_partition_view, intermediate_degree, graph_degree, params.metric));
-      } else {
-        sub_index.emplace([&]() -> sub_index_t {
-          if (use_disk_mode) {
-            const size_t current_free_gpu = rmm::available_device_memory().first;
-            const size_t configured_gpu =
-              ace_params.max_gpu_memory_gb > 0
-                ? static_cast<size_t>(ace_params.max_gpu_memory_gb * (1ULL << 30))
-                : current_free_gpu;
-            const size_t free_gpu_bytes = std::min(current_free_gpu, configured_gpu);
-            if (sub_ds_bytes < static_cast<size_t>(0.4 * free_gpu_bytes)) {
-              try {
-                auto sub_dataset_tight =
-                  raft::make_device_matrix<T, int64_t>(res, sub_dataset_size, dataset_dim);
-                raft::resource::sync_stream(res);
-                ace_load_partition_dataset_from_disk<T, IdxT>(partition_id,
-                                                              dataset_dim,
-                                                              partition_histogram.view(),
-                                                              core_partition_offsets.view(),
-                                                              augmented_partition_offsets.view(),
-                                                              reordered_fd,
-                                                              augmented_fd,
-                                                              reordered_header_size,
-                                                              augmented_header_size,
-                                                              sub_dataset_tight.view());
-                read_end              = std::chrono::high_resolution_clock::now();
-                auto sub_dataset_view = raft::make_const_mdspan(sub_dataset_tight.view());
-                std::unique_ptr<cuvs::neighbors::device_padded_dataset<T, int64_t>>
-                  sub_dataset_padded;
-                auto sub_dataset_dev = [&]() {
-                  if (cuvs::neighbors::matrix_row_width_matches_cagra_required(sub_dataset_view)) {
-                    return cuvs::neighbors::make_device_padded_dataset_view(res, sub_dataset_view);
-                  }
-                  sub_dataset_padded =
-                    cuvs::neighbors::make_device_padded_dataset(res, sub_dataset_view);
-                  return sub_dataset_padded->as_dataset_view();
-                }();
-                auto direct_index =
-                  ::cuvs::neighbors::cagra::detail::build_from_device_matrix<T, IdxT>(
-                    res, sub_index_params, sub_dataset_dev);
-                used_device_read = true;
-                return sub_index_t{std::in_place_type<device_sub_index_t>, std::move(direct_index)};
-              } catch (const std::bad_alloc& e) {
-                RAFT_LOG_WARN(
-                  "ACE: partition %lu did not fit in device memory for a direct (GDS) read: %s; "
-                  "falling back to a host read",
-                  partition_id,
-                  e.what());
-              }
-            }
 
-            auto sub_dataset = raft::make_host_matrix<T, int64_t>(sub_dataset_size, dataset_dim);
-            ace_load_partition_dataset_from_disk<T, IdxT>(partition_id,
-                                                          dataset_dim,
-                                                          partition_histogram.view(),
-                                                          core_partition_offsets.view(),
-                                                          augmented_partition_offsets.view(),
-                                                          reordered_fd,
-                                                          augmented_fd,
-                                                          reordered_header_size,
-                                                          augmented_header_size,
-                                                          sub_dataset.view());
-            return build_host_sub_index(sub_dataset);
-          }
-
-          auto sub_dataset = raft::make_host_matrix<T, int64_t>(sub_dataset_size, dataset_dim);
-          ace_make_core_argument_partition<T, IdxT>(core_sub_dataset_size,
-                                                    augmented_sub_dataset_size,
-                                                    dataset_dim,
-                                                    partition_id,
-                                                    dataset_view,
-                                                    core_backward_mapping.view(),
-                                                    augmented_backward_mapping.view(),
-                                                    core_partition_offsets.view(),
-                                                    augmented_partition_offsets.view(),
-                                                    sub_dataset.view());
-          return build_host_sub_index(sub_dataset);
-        }());
-      }
+        auto sub_dataset = raft::make_host_matrix<T, int64_t>(sub_dataset_size, dataset_dim);
+        ace_make_core_argument_partition<T, IdxT>(core_sub_dataset_size,
+                                                  augmented_sub_dataset_size,
+                                                  dataset_dim,
+                                                  partition_id,
+                                                  dataset_view,
+                                                  core_backward_mapping.view(),
+                                                  augmented_backward_mapping.view(),
+                                                  core_partition_offsets.view(),
+                                                  augmented_partition_offsets.view(),
+                                                  sub_dataset.view());
+        return build_host_partition_graph(sub_dataset);
+      };
+      build_partition_graph();
       if (used_device_read) {
         RAFT_LOG_DEBUG("ACE: partition %lu read directly into device memory (GDS path)",
                        partition_id);
